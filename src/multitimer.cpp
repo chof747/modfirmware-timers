@@ -10,7 +10,7 @@ TimerMileStone::TimerMileStone(MultiTimer *timer, time_t time, String name, bool
     : timer(timer), time(0), name(name)
 //****************************************************************************************
 {
-  time = (backwards) ? timer->getDuration() - time : time;
+  this->time = (backwards) ? timer->getDuration() - time : time;
 }
 
 MultiTimer::MultiTimer(time_t shortPeriod, time_t longPeriod)
@@ -40,12 +40,15 @@ void MultiTimer::loop()
   if (triggered)
   {
     triggered = false;
-    logger->debug(LOGTAG, "Triggered!");
 
     if (milestones.end() != currentMilestone)
     {
-      onMileStone(currentMilestone->name.c_str(), millis() - reference);
+#ifdef DEVELOPMENT
+      logger->debug(LOGTAG, "Milstone triggered at %d", MULTITIMER_TIMING());
+#endif 
+      onMileStone(currentMilestone->name.c_str(), MULTITIMER_TIMING() - reference);
       elapsed = currentMilestone->time;
+      currentMilestone++;
       timeNextMilesStone();
     }
     else
@@ -56,12 +59,12 @@ void MultiTimer::loop()
       clear();
       dettach(this);
 
-      onFinish(millis() - reference);
+      onFinish(MULTITIMER_TIMING() - reference);
       state = state_t::DONE;
     }
   }
 
-  if (RUNNING == state) 
+  if (RUNNING == state)
   {
     checkPeriods();
   }
@@ -142,7 +145,6 @@ void MultiTimer::start()
     return;
   }
 
-  logger->debug(LOGTAG, "state = %d", state);
   if (state_t::PAUSED == state)
   {
     resume();
@@ -159,7 +161,7 @@ void MultiTimer::start()
     }
 
     elapsed = 0;
-    reference = millis();
+    reference = MULTITIMER_TIMING();
     timeNextMilesStone();
   }
 }
@@ -171,13 +173,13 @@ time_t MultiTimer::pause()
     return 0;
 
 #ifdef ESP32
-  elapsed = millis() - reference;
+  elapsed = MULTITIMER_TIMING() - reference;
   dettach(this);
 #else
 #endif
 
   state = state_t::PAUSED;
-  logger->info(LOGTAG, "Pausing timer at %d with elapsed time = %d", millis(), elapsed);
+  logger->info(LOGTAG, "Pausing timer at %d with elapsed time = %d", MULTITIMER_TIMING(), elapsed);
   return elapsed;
 }
 
@@ -187,8 +189,9 @@ time_t MultiTimer::resume()
   if (!(state_t::PAUSED == state))
     return 0;
 
+  reference = MULTITIMER_TIMING() - elapsed;
   timeNextMilesStone();
-  logger->info(LOGTAG, "Resuming timer at %d with next interval in = %d", millis(), nextEventTime);
+  logger->info(LOGTAG, "Resuming timer at %d with next interval in = %d", MULTITIMER_TIMING(), nextEventTime);
   return elapsed;
 }
 
@@ -200,7 +203,7 @@ time_t MultiTimer::reset(bool startImmidiately)
 #else
 #endif
 
-  time_t t = millis() - reference;
+  time_t t = MULTITIMER_TIMING() - reference;
 
   elapsed = 0;
   reference = 0;
@@ -238,21 +241,23 @@ void MultiTimer::timeNextMilesStone()
 //****************************************************************************************
 {
   nextEventTime =
-      ((currentMilestone == milestones.end()) ? duration : currentMilestone->time) - elapsed;
-
-  logger->debug(LOGTAG, "Setting timer event in %d at %d", nextEventTime, millis());
+      ((currentMilestone == milestones.end()) ? duration : currentMilestone->time) - (MULTITIMER_TIMING() - reference);
 
 #ifdef ESP32
   ESP32Timer *t = attach(this, nextEventTime);
-  if (NULL != t)
-  {
-    logger->debug(LOGTAG, "Timer no is %d", t->getTimer());
-  }
-  else
+  if (NULL == t)
   {
     logger->warn(LOGTAG, "Could not attach timer to a HW timer");
   }
 #else
+#endif
+
+#ifdef DEVELOPMENT
+  if (currentMilestone != milestones.end())
+  {
+    logger->debug(LOGTAG, "Next milestone is %s at timestamp %d", currentMilestone->name, currentMilestone->time);
+  }
+  logger->debug(LOGTAG, "Setting timer event in %d at %d (elapsed = %d)", nextEventTime, MULTITIMER_TIMING(), elapsed);
 #endif
 
   state = state_t::RUNNING;
@@ -261,7 +266,12 @@ void MultiTimer::timeNextMilesStone()
 void MultiTimer::checkPeriods()
 //****************************************************************************************
 {
-  time_t now = millis();
+  time_t now = MULTITIMER_TIMING();
+  if (now <= lastTimeStamp)
+  {
+    return;
+  }
+
   if ((0 == (now % shortPeriod)) && (NULL != onPeriod))
   {
     onPeriod(periodtype_t::SHORT, now);
@@ -271,6 +281,7 @@ void MultiTimer::checkPeriods()
   {
     onPeriod(periodtype_t::LONG, now);
   }
+  lastTimeStamp = now;
 }
 
 bool MultiTimer::timerHandler(void *timerNo)
@@ -291,16 +302,23 @@ ESP32Timer *MultiTimer::attach(MultiTimer *mt, time_t interval)
 {
   for (int i = 0; i < MAX_ESP32_NUM_TIMERS; ++i)
   {
-    if (NULL == timerBinding[i].mt)
+    if (mt == timerBinding[i].mt)
+    {
+      ESP32Timer *et = timerBinding[i].esp32Timer;
+      et->detachInterrupt();
+      timer_isr_callback_remove((timer_group_t)et->getTimerGroup(), (timer_idx_t)et->getTimer());
+      et->attachInterruptInterval(interval * 1000, MultiTimer::timerHandler);
+      return et;
+    }
+    else if (NULL == timerBinding[i].mt)
     {
       timerBinding[i].mt = mt;
       timerBinding[i].esp32Timer = new ESP32Timer(i);
 
       mt->triggered = false;
-      timerBinding[i].esp32Timer->attachInterruptInterval(interval * 1000, MultiTimer::timerHandler);
+      timerBinding[i].esp32Timer->attachInterruptInterval(interval * (1000000L / (1 IN_SECONDS)), MultiTimer::timerHandler);
+      return timerBinding[i].esp32Timer;
     }
-
-    return timerBinding[i].esp32Timer;
   }
 
   return NULL;
@@ -313,12 +331,12 @@ bool MultiTimer::dettach(const MultiTimer *mt)
   {
     if (mt == timerBinding[i].mt)
     {
-      mt->logger->debug("LOGTAG", "Dettaching from %d", i);
+      mt->logger->debug(LOGTAG, "Dettaching from %d", i);
       timerBinding[i].mt = NULL;
-      
-      ESP32Timer* et = timerBinding[i].esp32Timer;
+
+      ESP32Timer *et = timerBinding[i].esp32Timer;
       et->detachInterrupt();
-      timer_isr_callback_remove((timer_group_t) et->getTimerGroup(), (timer_idx_t) et->getTimer());
+      timer_isr_callback_remove((timer_group_t)et->getTimerGroup(), (timer_idx_t)et->getTimer());
 
       delete timerBinding[i].esp32Timer;
       timerBinding[i].esp32Timer = NULL;
