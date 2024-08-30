@@ -45,8 +45,12 @@ void MultiTimer::loop()
     {
 #ifdef DEVELOPMENT
       logger->debug(LOGTAG, "Milstone triggered at %d", MULTITIMER_TIMING());
-#endif 
-      onMileStone(currentMilestone->name.c_str(), MULTITIMER_TIMING() - reference);
+#endif
+      if ((NULL != onMileStone) && (!onMileStone(currentMilestone->name.c_str(), MULTITIMER_TIMING() - reference)))
+      {
+        reset();
+      }
+
       elapsed = currentMilestone->time;
       currentMilestone++;
       timeNextMilesStone();
@@ -59,7 +63,10 @@ void MultiTimer::loop()
       clear();
       dettach(this);
 
-      onFinish(MULTITIMER_TIMING() - reference);
+      if (NULL != onFinish)
+      {
+        onFinish(MULTITIMER_TIMING() - reference);
+      }
       state = state_t::DONE;
     }
   }
@@ -99,40 +106,30 @@ time_t MultiTimer::addMileStoneBeforeEnd(time_t millisBeforeEnd, String caption)
 void MultiTimer::setPeriodCallback(PeriodicCallBack cb)
 //****************************************************************************************
 {
-  if (NULL == cb)
-    return;
   onPeriod = cb;
 }
 
 void MultiTimer::setMileStoneCallback(MileStoneCallBack cb)
 //****************************************************************************************
 {
-  if (NULL == cb)
-    return;
   onMileStone = cb;
 }
 
 void MultiTimer::setFinishedCallback(SimpleCallBack cb)
 //****************************************************************************************
 {
-  if (NULL == cb)
-    return;
   onFinish = cb;
 }
 
 void MultiTimer::setResetCallback(SimpleCallBack cb)
 //****************************************************************************************
 {
-  if (NULL == cb)
-    return;
   onReset = cb;
 }
 
 void MultiTimer::setPauseCallback(SimpleCallBack cb)
 //****************************************************************************************
 {
-  if (NULL == cb)
-    return;
   onPause = cb;
 }
 
@@ -178,6 +175,11 @@ time_t MultiTimer::pause()
 #else
 #endif
 
+  if (NULL != onPause)
+  {
+    onPause(MULTITIMER_TIMING());
+  }
+
   state = state_t::PAUSED;
   logger->info(LOGTAG, "Pausing timer at %d with elapsed time = %d", MULTITIMER_TIMING(), elapsed);
   return elapsed;
@@ -208,6 +210,11 @@ time_t MultiTimer::reset(bool startImmidiately)
   elapsed = 0;
   reference = 0;
   currentMilestone = milestones.end();
+
+  if (NULL != onReset)
+  {
+    onReset(MULTITIMER_TIMING());
+  }
 
   if (startImmidiately)
   {

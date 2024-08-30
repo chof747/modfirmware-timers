@@ -58,9 +58,9 @@ namespace ModFirmWare
       DONE = 4
     };
 
-    using MileStoneCallBack = std::function<bool(const char* caption, time_t atMillis)>;
-    using PeriodicCallBack = std::function<bool(const periodtype_t periodType, time_t atMillis)>;
-    using SimpleCallBack = std::function<void(time_t atMillis)>;
+    using MileStoneCallBack = std::function<bool(const char* caption, time_t atTime)>;
+    using PeriodicCallBack = std::function<bool(const periodtype_t periodType, time_t atTime)>;
+    using SimpleCallBack = std::function<void(time_t atTime)>;
 
     MultiTimer(time_t shortPeriod = 1 IN_SECONDS, time_t longPeriod = 60 IN_SECONDS);
     ~MultiTimer();
