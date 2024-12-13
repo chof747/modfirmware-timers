@@ -59,7 +59,7 @@ namespace ModFirmWare
     };
 
     using MileStoneCallBack = std::function<bool(const char* caption, time_t atTime)>;
-    using PeriodicCallBack = std::function<bool(const periodtype_t periodType, time_t atTime)>;
+    using PeriodicCallBack = std::function<bool(const periodtype_t periodType, time_t atTime, time_t elapsed, time_t remaining, time_t toNextMilestone)>;
     using SimpleCallBack = std::function<void(time_t atTime)>;
 
     MultiTimer(time_t shortPeriod = 1 IN_SECONDS, time_t longPeriod = 60 IN_SECONDS);
@@ -102,9 +102,11 @@ namespace ModFirmWare
 
     PeriodicCallBack onPeriod;
     MileStoneCallBack onMileStone;
+    SimpleCallBack onStart;
     SimpleCallBack onFinish;
     SimpleCallBack onReset;
     SimpleCallBack onPause;
+    SimpleCallBack onResume;
 
     time_t addMilestone(time_t time, String name, bool backwards = false); 
 
@@ -116,6 +118,7 @@ namespace ModFirmWare
     time_t lastTimeStamp; 
 
     time_t nextEventTime;
+    time_t milestoneReference;
 
     volatile bool triggered;
 

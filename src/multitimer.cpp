@@ -16,7 +16,8 @@ TimerMileStone::TimerMileStone(MultiTimer *timer, time_t time, String name, bool
 MultiTimer::MultiTimer(time_t shortPeriod, time_t longPeriod)
     : duration(0), shortPeriod(shortPeriod), longPeriod(longPeriod), milestones(), currentMilestone(milestones.end()),
       onFinish(NULL), onMileStone(NULL), onPeriod(NULL), onReset(NULL), onPause(NULL),
-      state(state_t::INVALID), elapsed(0), reference(0), lastTimeStamp(0), nextEventTime(0)
+      state(state_t::INVALID), elapsed(0), reference(0), lastTimeStamp(0), 
+      milestoneReference(0), nextEventTime(0)
 //****************************************************************************************
 {
 }
@@ -160,6 +161,11 @@ void MultiTimer::start()
     elapsed = 0;
     reference = MULTITIMER_TIMING();
     timeNextMilesStone();
+
+    if (NULL != onStart)
+    {
+      onStart(MULTITIMER_TIMING());
+    }
   }
 }
 
@@ -193,6 +199,12 @@ time_t MultiTimer::resume()
 
   reference = MULTITIMER_TIMING() - elapsed;
   timeNextMilesStone();
+
+  if (NULL != onResume)
+  {
+    onResume(MULTITIMER_TIMING());
+  }
+
   logger->info(LOGTAG, "Resuming timer at %d with next interval in = %d", MULTITIMER_TIMING(), nextEventTime);
   return elapsed;
 }
@@ -247,8 +259,9 @@ void MultiTimer::clear()
 void MultiTimer::timeNextMilesStone()
 //****************************************************************************************
 {
+  milestoneReference = MULTITIMER_TIMING();
   nextEventTime =
-      ((currentMilestone == milestones.end()) ? duration : currentMilestone->time) - (MULTITIMER_TIMING() - reference);
+      ((currentMilestone == milestones.end()) ? duration : currentMilestone->time) - (milestoneReference - reference);
 
 #ifdef ESP32
   ESP32Timer *t = attach(this, nextEventTime);
@@ -279,14 +292,19 @@ void MultiTimer::checkPeriods()
     return;
   }
 
+  time_t elapsedTime = now - reference;
+  time_t remaining = duration - elapsed;
+  time_t remainingToMilestone = (nextEventTime + milestoneReference) - now;
+
+
   if ((0 == (now % shortPeriod)) && (NULL != onPeriod))
   {
-    onPeriod(periodtype_t::SHORT, now);
+    onPeriod(periodtype_t::SHORT, now, elapsedTime, remaining, remainingToMilestone);
   }
 
   if ((0 == (now % longPeriod)) && (NULL != onPeriod))
   {
-    onPeriod(periodtype_t::LONG, now);
+    onPeriod(periodtype_t::LONG, now, elapsedTime, remaining, remainingToMilestone);
   }
   lastTimeStamp = now;
 }
