@@ -1,4 +1,8 @@
 #include "multitimer.h"
+
+#include "state/ready_state.h"
+#include "state/done_state.h"
+
 using namespace ModFirmWare;
 
 #define LOGTAG "timer"
@@ -16,7 +20,7 @@ TimerMileStone::TimerMileStone(MultiTimer *timer, time_t time, String name, bool
 MultiTimer::MultiTimer(time_t shortPeriod, time_t longPeriod)
     : duration(0), shortPeriod(shortPeriod), longPeriod(longPeriod), milestones(), currentMilestone(milestones.end()),
       onFinish(NULL), onMileStone(NULL), onPeriod(NULL), onReset(NULL), onPause(NULL),
-      state(state_t::INVALID), elapsed(0), reference(0), lastTimeStamp(0), 
+      state(new TimerReadyState()), elapsed(0), reference(0), lastTimeStamp(0),
       milestoneReference(0), nextEventTime(0)
 //****************************************************************************************
 {
@@ -25,6 +29,10 @@ MultiTimer::MultiTimer(time_t shortPeriod, time_t longPeriod)
 MultiTimer::~MultiTimer()
 //****************************************************************************************
 {
+  if (nullptr != state)
+  {
+    delete state;
+  }
   clear();
 }
 
@@ -68,14 +76,11 @@ void MultiTimer::loop()
       {
         onFinish(MULTITIMER_TIMING() - reference);
       }
-      state = state_t::DONE;
+      setState(new TimerDoneState());
     }
   }
 
-  if (RUNNING == state)
-  {
-    checkPeriods();
-  }
+  state->checkPeriods(this);
 }
 
 #else
@@ -89,7 +94,6 @@ void MultiTimer::setDuration(time_t duration)
 //****************************************************************************************
 {
   this->duration = duration;
-  state = state_t::READY;
 }
 
 time_t MultiTimer::addMileStoneAfterStart(time_t millisAfterStart, String caption)
@@ -137,63 +141,20 @@ void MultiTimer::setPauseCallback(SimpleCallBack cb)
 void MultiTimer::start()
 //****************************************************************************************
 {
-  if (!((state_t::DONE == state) || (state_t::READY == state)))
-  {
-    logger->warn(LOGTAG, "Trying to start timer but state is not right %d", state);
-    return;
-  }
-
-  if (state_t::PAUSED == state)
-  {
-    resume();
-  }
-  else
-  {
-    if (0 < milestones.size())
-    {
-      currentMilestone = milestones.begin();
-    }
-    else
-    {
-      currentMilestone = milestones.end();
-    }
-
-    elapsed = 0;
-    reference = MULTITIMER_TIMING();
-    timeNextMilesStone();
-
-    if (NULL != onStart)
-    {
-      onStart(MULTITIMER_TIMING());
-    }
-  }
+  state->start(this);
 }
 
 time_t MultiTimer::pause()
 //****************************************************************************************
 {
-  if (!(state_t::RUNNING == state))
-    return 0;
-
-#ifdef ESP32
-  elapsed = MULTITIMER_TIMING() - reference;
-  dettach(this);
-#else
-#endif
-
-  if (NULL != onPause)
-  {
-    onPause(MULTITIMER_TIMING());
-  }
-
-  state = state_t::PAUSED;
-  logger->info(LOGTAG, "Pausing timer at %d with elapsed time = %d", MULTITIMER_TIMING(), elapsed);
-  return elapsed;
+  return state->pause(this);
 }
 
 time_t MultiTimer::resume()
 //****************************************************************************************
 {
+  state->resume(this);
+  /*
   if (!(state_t::PAUSED == state))
     return 0;
 
@@ -207,11 +168,13 @@ time_t MultiTimer::resume()
 
   logger->info(LOGTAG, "Resuming timer at %d with next interval in = %d", MULTITIMER_TIMING(), nextEventTime);
   return elapsed;
+  */
 }
 
 time_t MultiTimer::reset(bool startImmidiately)
 //****************************************************************************************
 {
+
 #ifdef ESP32
   dettach(this);
 #else
@@ -234,10 +197,42 @@ time_t MultiTimer::reset(bool startImmidiately)
   }
   else
   {
-    state = state_t::READY;
+    setState(new TimerReadyState());
   }
 
   return t;
+}
+
+void MultiTimer::setState(TimerState *newState)
+//****************************************************************************************
+{
+  if (nullptr != state)
+  {
+    delete state;
+  }
+  state = newState;
+}
+
+void MultiTimer::startTimer()
+//****************************************************************************************
+{
+  if (0 < milestones.size())
+  {
+    currentMilestone = milestones.begin();
+  }
+  else
+  {
+    currentMilestone = milestones.end();
+  }
+
+  elapsed = 0;
+  reference = MULTITIMER_TIMING();
+  timeNextMilesStone();
+
+  if (NULL != onStart)
+  {
+    onStart(MULTITIMER_TIMING());
+  }
 }
 
 time_t MultiTimer::addMilestone(time_t time, String name, bool backwards)
@@ -263,14 +258,17 @@ void MultiTimer::timeNextMilesStone()
   nextEventTime =
       ((currentMilestone == milestones.end()) ? duration : currentMilestone->time) - (milestoneReference - reference);
 
-#ifdef ESP32
-  ESP32Timer *t = attach(this, nextEventTime);
-  if (NULL == t)
+  if (0 < nextEventTime)
   {
-    logger->warn(LOGTAG, "Could not attach timer to a HW timer");
-  }
+#ifdef ESP32
+    ESP32Timer *t = attach(this, nextEventTime);
+    if (NULL == t)
+    {
+      logger->warn(LOGTAG, "Could not attach timer to a HW timer");
+    }
 #else
 #endif
+  }
 
 #ifdef DEVELOPMENT
   if (currentMilestone != milestones.end())
@@ -279,8 +277,6 @@ void MultiTimer::timeNextMilesStone()
   }
   logger->debug(LOGTAG, "Setting timer event in %d at %d (elapsed = %d)", nextEventTime, MULTITIMER_TIMING(), elapsed);
 #endif
-
-  state = state_t::RUNNING;
 }
 
 void MultiTimer::checkPeriods()
@@ -295,7 +291,6 @@ void MultiTimer::checkPeriods()
   time_t elapsedTime = now - reference;
   time_t remaining = duration - elapsed;
   time_t remainingToMilestone = (nextEventTime + milestoneReference) - now;
-
 
   if ((0 == (now % shortPeriod)) && (NULL != onPeriod))
   {
